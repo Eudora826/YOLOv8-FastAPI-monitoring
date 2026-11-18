@@ -150,7 +150,7 @@ jobs:
       - name: Jaeger received traces
         run: |
           for i in $(seq 1 12); do
-            if curl -sf "http://localhost:16686/api/services" | grep -q "yolo-inference-platform"; then
+            if curl -sf "http://localhost:16686/api/services" | grep -q "yolov8-fastapi-monitoring"; then
               echo "traces arrived"; exit 0
             fi
             sleep 5

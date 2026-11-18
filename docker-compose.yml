@@ -14,7 +14,7 @@
 # must exist even under a bare docker run; traces only make sense once a
 # backend aggregates them, and the Collector decouples that backend.
 
-name: yolo-inference-platform
+name: yolov8-fastapi-monitoring
 
 services:
   # ---------------------------------------------------------------------
@@ -29,7 +29,7 @@ services:
       # Tracing is enabled only when this is set. Without it tracing.py does
       # nothing, so the image can also run on its own with docker run.
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
-      OTEL_SERVICE_NAME: yolo-inference-platform
+      OTEL_SERVICE_NAME: yolov8-fastapi-monitoring
       JOB_RETENTION_MINUTES: "60"
     healthcheck:
       # The slim image has no curl; the bundled Python is more reliable anyway.

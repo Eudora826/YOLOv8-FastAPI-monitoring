@@ -1,6 +1,6 @@
-# YOLO Inference Platform
+# YOLOv8-FastAPI-monitoring
 
-[![CI](https://github.com/Eudora826/yolo-inference-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Eudora826/yolo-inference-platform/actions/workflows/ci.yml)
+[![CI/CD](https://github.com/Eudora826/YOLOv8-FastAPI-monitoring/actions/workflows/ci.yml/badge.svg)](https://github.com/Eudora826/YOLOv8-FastAPI-monitoring/actions/workflows/ci.yml)
 
 Production-shaped object detection as a service: **FastAPI + YOLOv8** with the
 observability a real deployment needs — Prometheus metrics, a provisioned
@@ -62,7 +62,7 @@ Just the service, no clone and no build — every push to `main` publishes an
 image to GHCR:
 
 ```bash
-docker run -p 8000:8000 ghcr.io/eudora826/yolo-inference-platform:latest
+docker run -p 8000:8000 ghcr.io/eudora826/yolov8-fastapi-monitoring:latest
 ```
 
 The whole stack — service, Prometheus, Grafana, Jaeger — needs the repo:
@@ -197,7 +197,7 @@ Everything is an environment variable — no rebuild needed.
 | `MAX_VIDEO_UPLOAD_MB` | `200` | Video upload size limit |
 | `JOBS_DIR` | system temp dir | Where video jobs store files |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty = tracing off)* | OTLP gRPC endpoint, `host:port`, no scheme |
-| `OTEL_SERVICE_NAME` | `yolo-inference-platform` | Name reported to the tracing backend |
+| `OTEL_SERVICE_NAME` | `yolov8-fastapi-monitoring` | Name reported to the tracing backend |
 
 ---
 

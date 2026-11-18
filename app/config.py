@@ -61,7 +61,7 @@ def service_name() -> str:
     value docker-compose.yml sets, so a local run and a containerised run
     land under the same name instead of creating two entries.
     """
-    return os.getenv("OTEL_SERVICE_NAME", "yolo-inference-platform")
+    return os.getenv("OTEL_SERVICE_NAME", "yolov8-fastapi-monitoring")
 
 
 def service_version() -> str:
