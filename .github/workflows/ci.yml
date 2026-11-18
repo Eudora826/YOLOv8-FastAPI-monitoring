@@ -3,22 +3,23 @@ name: CI/CD
 on:
   push:
     branches: [main]
-    # 打 v* 标签也触发整条流水线：版本化发布前必须重新验证一遍，
-    # 不能假设 tag 指向的 commit 当初是绿的。
+    # A v* tag also runs the whole pipeline: a versioned release must be
+    # verified again, not assumed green because its commit once was.
     tags: ["v*"]
   pull_request:
     branches: [main]
 
 env:
-  # 权重不进 git（6.3 MB 二进制），构建和测试时按需下载
+  # Weights stay out of git (6.3 MB binary) and are downloaded when needed
   WEIGHTS_URL: https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
 
-# 运行器钉死在 ubuntu-24.04，不用 ubuntu-latest：那个标签会随 GitHub
-# 的节奏滚动（2026-10-19 起滚到 Ubuntu 26），意味着某天早上 CI 会在
-# 你一行代码都没改的情况下变红。可复现性比"永远最新"重要。
+# Runners are pinned to ubuntu-24.04 rather than ubuntu-latest: that label
+# moves on GitHub's schedule (to Ubuntu 26 from 2026-10-19), so CI could turn
+# red one morning without a single code change. Reproducibility beats
+# "always latest".
 
 jobs:
-  # 最快的先跑，失败得早，省 CI 时间也省你的时间
+  # Fastest job first: failing early saves CI time and yours
   lint:
     runs-on: ubuntu-24.04
     steps:
@@ -36,7 +37,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          # 不缓存的话每次都要重新下 200 MB 的 torch
+          # Without the cache, every run downloads 200 MB of torch again
           cache: pip
           cache-dependency-path: |
             requirements.txt
@@ -53,24 +54,26 @@ jobs:
     needs: [lint, test]
     steps:
       - uses: actions/checkout@v4
-      # 刻意不预先下载权重：Dockerfile 自己在构建时拉。这样这个 job
-      # 走的就是别人 clone 之后的真实路径 —— 先 wget 补上文件再构建，
-      # 等于替用户把坑填了，然后看不见坑。
+      # Deliberately no weights download here: the Dockerfile fetches them
+      # itself. This job then follows the same path as a fresh clone; fetching
+      # the file first would quietly cover up the problem users would hit.
       - name: Build image
         run: docker build -t yolo-inference:ci .
       - name: Report image size
         run: docker images yolo-inference:ci --format "{{.Repository}}:{{.Tag}}  {{.Size}}"
 
-  # 单元测试保证代码逻辑对，冒烟测试保证**整套东西真的能跑起来**。
-  # 这个 job 抓的是单元测试碰不到的一整类问题：服务名写错、端口写错、
-  # 挂载路径写错、healthcheck 写错、Grafana provisioning 路径写错。
+  # Unit tests check the code logic; the smoke test checks that the **whole
+  # stack actually runs**. It catches a class of problems unit tests cannot
+  # see: a wrong service name, port, mount path, healthcheck, or Grafana
+  # provisioning path.
   smoke:
     runs-on: ubuntu-24.04
     needs: build
     steps:
       - uses: actions/checkout@v4
 
-      # 同上：从一个干净的 checkout 直接起栈，和 README 教的命令一模一样。
+      # Same idea: start the stack from a clean checkout with the exact
+      # command the README gives.
       - name: Start the stack
         run: docker compose up -d --build
 
@@ -89,7 +92,7 @@ jobs:
           for i in $(seq 1 5); do
             curl -sf -X POST "http://localhost:8000/predict" -F "file=@cat.jpg" > /dev/null
           done
-          # 故意来一个坏请求，确认错误路径也被记录
+          # One deliberately bad request, so the error path is recorded too
           curl -s -o /dev/null -X POST "http://localhost:8000/predict" \
             -F "file=@README.md;type=text/plain"
 
@@ -104,19 +107,21 @@ jobs:
 
       - name: Prometheus is actually scraping the service
         run: |
-          # 光 curl 一下 /health 不够 —— 要确认 Prometheus 真的抓到了数据。
-          # 这一步才是这个 job 存在的理由。
+          # Curling /health is not enough: this checks that Prometheus
+          # actually scraped data. That is why this job exists.
           #
-          # 两处防御，都是被真实的 CI 失败教出来的：
+          # Two safeguards, both learned from real CI failures:
           #
-          #  1. 整个管道放进 `if` 里。GitHub Actions 用 bash -e 跑脚本，
-          #     而 `if` 中的命令失败**不触发** -e。早先的版本把 curl 的
-          #     输出喂给 python 解析，Prometheus 还没完成首次抓取时
-          #     curl 返回空、python 抛 JSONDecodeError，整个步骤在
-          #     0.2 秒内就被 -e 杀掉 —— 重试循环一次都没转完。
+          #  1. The whole pipeline sits inside `if`. GitHub Actions runs
+          #     scripts with bash -e, and a failing command inside `if`
+          #     does **not** trigger -e. An earlier version piped curl's
+          #     output into python; before Prometheus finished its first
+          #     scrape, curl returned nothing, python raised
+          #     JSONDecodeError, and -e killed the step within 0.2 seconds,
+          #     before the retry loop completed a single pass.
           #
-          #  2. 用 -G --data-urlencode 让 curl 去编码 {} 和引号，
-          #     而不是把裸字符塞进 URL。
+          #  2. -G --data-urlencode lets curl encode {} and the quotes,
+          #     instead of putting raw characters in the URL.
           for i in $(seq 1 30); do
             if curl -s -G 'http://localhost:9090/api/v1/query' \
                  --data-urlencode 'query=up{job="yolo-service"}' \
@@ -152,7 +157,7 @@ jobs:
           done
           echo "jaeger never saw the service"; exit 1
 
-      # 没有这一步的话，CI 挂了你完全不知道为什么
+      # Without this step, a failed run gives no clue why
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --tail=200
@@ -162,29 +167,32 @@ jobs:
         run: docker compose down -v
 
   # ---------------------------------------------------------------------
-  # CD —— 到这里为止都是 CI（验证）。下面这个 job 是交付：
-  # 把**已经通过冒烟测试的**那份代码构建成镜像，推到 GHCR，
-  # 这样别人一条 docker run 就能试，不用 clone、不用等构建。
+  # CD: everything above is CI (verification). The job below is delivery:
+  # it builds the code that **already passed the smoke test** into an image
+  # and pushes it to GHCR, so anyone can try it with a single docker run,
+  # without cloning or waiting for a build.
   #
-  # 这是 Continuous *Delivery*（制品自动就绪），不是 Continuous
-  # *Deployment*（自动上线）—— 没有部署目标，按不按部署按钮还是人决定。
-  # 简历上别把这一步写成 "deploys to production"。
+  # This is Continuous *Delivery* (the artifact is ready automatically), not
+  # Continuous *Deployment* (going live automatically): there is no deploy
+  # target, and a person still decides whether to deploy.
+  # Do not describe this step on a resume as "deploys to production".
   # ---------------------------------------------------------------------
   publish:
     runs-on: ubuntu-24.04
     needs: smoke
-    # PR 不发布：没必要为一个还没合并的分支推 2.4 GB 上去。
-    # 只有推到 main 或打 v* 标签才交付。
+    # Pull requests do not publish: no point pushing 2.4 GB for a branch
+    # that is not merged yet. Only pushes to main and v* tags deliver.
     if: github.event_name == 'push'
     permissions:
-      packages: write   # 推镜像到 GHCR
-      contents: write   # 打标签时创建 Release
+      packages: write   # push the image to GHCR
+      contents: write   # create a Release when a tag is pushed
     steps:
       - uses: actions/checkout@v4
 
-      # GHCR 的镜像名必须全小写，而 GitHub 用户名是 "Eudora826"（大写 E）。
-      # 直接用 ${{ github.repository }} 会报 "repository name must be
-      # lowercase"。${VAR,,} 是 bash 的小写展开。
+      # GHCR image names must be all lowercase, but the GitHub user name is
+      # "Eudora826" (capital E). Using ${{ github.repository }} as is fails
+      # with "repository name must be lowercase". ${VAR,,} is bash's
+      # lowercase expansion.
       - name: Lowercase the image name
         id: img
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
@@ -194,13 +202,13 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          # 内置令牌，不用自己配任何 secret
+          # The built-in token: no secret to set up
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 自动生成一组标签，而不是只有一个永远在变的 latest：
-      #   latest        仅 main 分支
-      #   sha-a1b2c3d   每个 commit 一个，可精确回滚到任意一次构建
-      #   v1.2.3 / v1.2 打 tag 时才有，语义化版本
+      # A set of tags rather than a single, ever-changing latest:
+      #   latest        main branch only
+      #   sha-a1b2c3d   one per commit, to roll back to any exact build
+      #   v1.2.3 / v1.2 only when a tag is pushed, semantic versions
       - name: Derive image tags
         id: meta
         uses: docker/metadata-action@v5
@@ -221,8 +229,9 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 镜像 2.4 GB，没有缓存每次都要重新装 torch。
-          # 层缓存存在 GitHub Actions 的缓存里，和前面的 build job 共享。
+          # The image is 2.4 GB; without a cache every run reinstalls torch.
+          # The layer cache is kept in the GitHub Actions cache, shared with
+          # the build job above.
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -231,9 +240,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # --generate-notes 让 GitHub 自己从上一个 tag 以来的
-          # commit / PR 生成变更说明，不用手写。
-          # 不和 --notes 一起用 —— 两者的组合行为随 gh 版本而变。
+          # --generate-notes lets GitHub write the release notes from the
+          # commits and PRs since the previous tag, so none are hand-written.
+          # Not combined with --notes: how the two interact varies between
+          # gh versions.
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes

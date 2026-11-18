@@ -1,20 +1,24 @@
-"""可选的 OpenTelemetry 链路追踪。
+"""Optional OpenTelemetry tracing.
 
-指标告诉你「p95 是 300ms」，链路告诉你「这一次 300ms 里 40ms 解码、
-250ms 推理、10ms 编码」。前者用于发现问题，后者用于定位问题，不可
-互相替代。
+Metrics tell you "p95 is 300 ms". Traces tell you that this particular 300 ms
+was 40 ms of decoding, 250 ms of inference and 10 ms of encoding. The first
+finds the problem, the second locates it, and neither substitutes for the
+other.
 
-默认关闭：只有环境变量 OTEL_EXPORTER_OTLP_ENDPOINT 有值时才启用，
-而 docker-compose.yml 会设置它。不设时 opentelemetry-api 发放的是
-non-recording span，所有调用都是空操作 —— 所以镜像可以脱离整套栈
-单独 docker run，代价接近零。
+Tracing is off unless OTEL_EXPORTER_OTLP_ENDPOINT is set, which is what
+docker-compose.yml does. With it unset, opentelemetry-api hands out
+non-recording spans and every call below becomes a no-op, so the image still
+runs standalone under a bare `docker run` at essentially zero cost.
 
-模块顶层只 import 了 API 包（很小、纯 Python）；SDK、exporter 和
-FastAPI 自动埋点都在 setup() 内部才 import，精简安装也能启动。
+Only the API package is imported at module scope; it is small and pure
+Python. The SDK, the exporter and the FastAPI instrumentation are imported
+inside setup(), so a slim install without them still boots.
 
-⚠️ 版本必须配套。核心包 1.X.0 对应 instrumentation 0.(X+21)b0，
-   本项目是 1.27.0 ↔ 0.48b0。混版本的典型症状是 ImportError，
-   或者更难查的「span 莫名其妙不上报」。
+Note on versions: the core packages and the instrumentation packages use
+different numbering, and they must match. Core 1.X.0 pairs with
+instrumentation 0.(X+21)b0 — here 1.27.0 with 0.48b0. Mixing them shows up
+either as an ImportError or, far harder to diagnose, as spans that silently
+never arrive.
 """
 
 import logging
@@ -36,7 +40,7 @@ _enabled = False
 
 
 def setup(app=None) -> bool:
-    """装上 OTLP 导出器。返回是否真的启用了追踪。"""
+    """Install the OTLP exporter. Returns whether tracing was switched on."""
     global _enabled
 
     endpoint = config.otlp_endpoint()
@@ -59,9 +63,10 @@ def setup(app=None) -> bool:
                 "service.version": config.service_version(),
             })
         )
-        # insecure=True：Collector 在同一个 compose 网络里，不是公网，
-        # 没有 TLS 要协商。注意 gRPC 的 endpoint 是 host:port，
-        # **不带 http:// 前缀** —— 带了会直接报错。
+        # insecure=True: the collector sits on the compose network, not the
+        # public internet, so there is no TLS to negotiate. Note that the gRPC
+        # endpoint is host:port with no http:// prefix — adding one is an
+        # immediate error.
         provider.add_span_processor(
             BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=True))
         )
@@ -70,10 +75,11 @@ def setup(app=None) -> bool:
         if app is not None:
             from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-            # /metrics 每 10 秒被 Prometheus 抓一次，/health 被 healthcheck
-            # 打得更勤。这些 span 毫无价值，还会把真正的请求淹没。
+            # Prometheus scrapes /metrics every 10s and the container
+            # healthcheck hits /health even more often. Those spans carry no
+            # information and would bury the requests that matter.
             FastAPIInstrumentor.instrument_app(app, excluded_urls="health,metrics")
-    except Exception as exc:  # 遥测挂了是小事，服务挂了是大事
+    except Exception as exc:  # telemetry failing is minor; the service dying is not
         logger.warning('{"event": "tracing_setup_failed", "error": "%s"}', exc)
         return False
 
@@ -88,11 +94,12 @@ def enabled() -> bool:
 
 @contextmanager
 def span(name: str, **attributes):
-    """开一个子 span。追踪关闭时是空操作。
+    """Open a child span. A no-op when tracing is disabled.
 
-    注意 span 属性和指标标签的基数规则**完全不同**：这里放
-    image.width=1280 完全没问题，因为 span 是离散事件不是聚合的
-    时间序列；同样的值放进指标标签就是灾难。
+    Span attributes and metric labels follow opposite cardinality rules:
+    image.width=1280 is perfectly fine here, because a span is a discrete
+    event rather than an aggregated time series. The same value as a metric
+    label would be a disaster.
     """
     with _tracer.start_as_current_span(name) as current:
         for key, value in attributes.items():
@@ -102,7 +109,7 @@ def span(name: str, **attributes):
 
 
 def annotate(**attributes) -> None:
-    """给当前活跃的 span 挂属性。"""
+    """Attach attributes to whichever span is currently active."""
     current = trace.get_current_span()
     for key, value in attributes.items():
         if value is not None:
@@ -110,10 +117,11 @@ def annotate(**attributes) -> None:
 
 
 def current_trace_id() -> Optional[str]:
-    """当前 span 的 trace id（32 位十六进制）。
+    """Hex trace id of the active span, 32 characters.
 
-    写进访问日志，就能从一条报错日志直接跳到 Jaeger 里的完整链路。
-    这个动作叫 log-trace correlation，是可观测性成熟度的标志之一。
+    Written into the access log so that a single error line leads straight to
+    the full trace in Jaeger. That join is called log-trace correlation and is
+    one of the markers of a mature observability setup.
     """
     context = trace.get_current_span().get_span_context()
     if not context.is_valid:
