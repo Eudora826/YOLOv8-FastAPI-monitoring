@@ -58,6 +58,15 @@ decision here, and it is deliberate — see [Design decisions](#design-decisions
 
 ## Quick start
 
+Just the service, no clone and no build — every push to `main` publishes an
+image to GHCR:
+
+```bash
+docker run -p 8000:8000 ghcr.io/eudora826/yolo-inference-platform:latest
+```
+
+The whole stack — service, Prometheus, Grafana, Jaeger — needs the repo:
+
 ```bash
 # service + monitoring, quiet
 docker compose up --build
@@ -75,15 +84,28 @@ docker compose --profile demo up --build
 | http://localhost:9090 | Prometheus — targets, PromQL, alerts |
 | http://localhost:16686 | Jaeger — distributed traces |
 
-The service also runs standalone, with no stack around it:
+Metrics work in the standalone mode too. Tracing switches itself off, because
+no collector endpoint is configured — that is the point of the pull/push split
+below.
 
-```bash
-docker build -t yolo-inference .
-docker run -d -p 8000:8000 yolo-inference
+### Pipeline
+
+Every push runs four verification jobs, then delivers an image:
+
+```
+lint ─┐
+      ├─► build ─► smoke ─► publish ─► ghcr.io/…:latest + :sha-<commit>
+test ─┘                       └─ only on main and v* tags, never on PRs
 ```
 
-Metrics still work in that mode. Tracing switches itself off, because no
-collector endpoint is configured.
+`smoke` brings the entire compose stack up on a clean runner and asserts that
+Prometheus is really scraping the service, that Grafana provisioned the
+dashboard, and that traces reached Jaeger — the class of failure unit tests
+cannot see. Tagging a commit `v1.2.3` additionally produces a versioned image
+and a GitHub Release.
+
+This is continuous **delivery**: the artifact is built, verified and ready on
+every commit. There is no deployment target, so nothing goes live on its own.
 
 ---
 
